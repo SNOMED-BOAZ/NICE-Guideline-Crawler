@@ -115,8 +115,8 @@ async def main():
     search_params = config['search_params']
     logger.info(f"- 검색 시작일: {search_params['from_date']}")
     logger.info(f"- 검색 종료일: {search_params['to_date']}")
-    logger.info(f"- Type: {search_params['type'] or '전체'}")
-    logger.info(f"- Guidance Programme: {search_params['guidance_programme'] or '전체'}")
+    logger.info(f"- Type: {search_params['type'] or ''}")
+    logger.info(f"- Guidance Programme: {search_params['guidance_programme'] or ''}")
     logger.info(f"- 페이지당 결과 수: {search_params['result_per_page']}")
     logger.info("\n=====================================\n")
     

@@ -23,6 +23,7 @@ ENV TO_DATE=""
 ENV TYPE=""
 ENV GUIDANCE_PROGRAMME=""
 ENV RESULT_PER_PAGE="20"
+ENV SEARCH_QUERY=""
 
 # 볼륨 설정
 VOLUME ["/app/output", "/app/logs"]
