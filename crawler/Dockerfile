@@ -9,20 +9,20 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 소스 코드 복사
-COPY main.py crawler.py ./
+COPY *.py ./
 
 # 필요한 디렉토리 생성
 RUN mkdir -p output logs
 
 # 환경 변수 설정
-ENV MAX_RETRIES=""
-ENV MAX_CONCURRENT=""
-ENV LOG_LEVEL=""
-ENV FROM_DATE=""
+ENV MAX_RETRIES="5"
+ENV MAX_CONCURRENT="15"
+ENV LOG_LEVEL="INFO"
+ENV FROM_DATE="2000-01-01"
 ENV TO_DATE=""
 ENV TYPE=""
-ENV GUIDANCE_PROGRAMME=""
-ENV RESULT_PER_PAGE="20"
+ENV PROGRAMME=""
+ENV RESULT_PER_PAGE="9999"
 ENV SEARCH_QUERY=""
 
 # 볼륨 설정

@@ -8,7 +8,8 @@ import pandas as pd
 import random
 import aiohttp
 import asyncio
-from tqdm.asyncio import tqdm_asyncio
+from tqdm import tqdm
+from tqdm.asyncio import tqdm as tqdm_asyncio
 
 class GuidanceCrawler:
     """진료지침 정보를 크롤링하는 클래스"""
@@ -32,7 +33,8 @@ class GuidanceCrawler:
             'from_date': 'from',
             'to_date': 'to',
             'type': 'ndt',
-            'guidance_programme': 'ngt',
+            'guidance_programme': 'ngt',  # Guidance 타입일 때 사용
+            'advice_programme': 'nat',    # NICE advice 타입일 때 사용
             'sort': 's',
             'result_per_page': 'ps',
             'page': 'pa'
@@ -45,6 +47,7 @@ class GuidanceCrawler:
             'to_date': None,
             'type': None,
             'guidance_programme': None,
+            'advice_programme': None,
             'sort': None,
             'result_per_page': None,
             'page': None
@@ -61,45 +64,28 @@ class GuidanceCrawler:
         # 입력된 파라미터 중 None이 아닌 값만 search_params에 업데이트
         valid_params = {k: v for k, v in params.items() if v is not None}
         self.search_params.update(valid_params)
-        
-        # 페이지 파라미터가 아닌 경우에만 로깅
-        if valid_params and 'page' not in valid_params:
-            self.logger.info("Set Request Params: " + ", ".join([f"{k}={v}" for k,v in valid_params.items()]))
-        elif not valid_params:
-            self.logger.info("No request parameters provided")
-
-    def update_page_number(self, page: int) -> None:
-        """페이지 번호를 업데이트합니다."""
-        self.search_params['page'] = page
 
     def get_url(self) -> str:
         """
-        self.search_params에서 None이 아닌 값들을 URL 파라미터로 변환하여 base_url에 추가하는 함수
+        self.search_params에서 None이 아니고 빈 문자열이 아닌 값들을 URL 파라미터로 변환하여 base_url에 추가하는 함수
         
         Returns:
             str: 파라미터가 포함된 최종 URL
         """
-        # None이 아닌 파라미터만 필터링
-        valid_params = {k: v for k, v in self.search_params.items() if v is not None}
+        # None이 아니고 빈 문자열이 아닌 파라미터만 필터링
+        valid_params = {
+            self.search_params_format[key]: value 
+            for key, value in self.search_params.items()
+            if value is not None and value != "" and key in self.search_params_format
+        }
         
         if not valid_params:
             return self.base_url
             
         # URL 생성
-        url = self.base_url
+        url = self.base_url + '?'
+        url += '&'.join([f"{key}={value}" for key, value in valid_params.items()])
         
-        # 첫 번째 파라미터는 '?'로 시작
-        first = True
-        for param_name, param_value in valid_params.items():
-            # search_params_format에서 실제 URL 파라미터 키 가져오기
-            param_key = self.search_params_format[param_name]
-            
-            if first:
-                url += f'?{param_key}={param_value}'
-                first = False
-            else:
-                url += f'&{param_key}={param_value}'
-                
         return url
 
     def _get_random_delay(self) -> float:
@@ -220,7 +206,7 @@ class GuidanceCrawler:
             str: 생성된 파일명
         """
         # 파일명에 포함될 키 순서
-        key_order = ['search_query', 'from_date', 'to_date', 'type', 'guidance_programme']
+        key_order = ['search_query', 'from_date', 'to_date', 'type', 'guidance_programme', 'advice_programme']
         
         # None이 아닌 값만 포함하여 파일명 생성
         parts = ['guidance']
@@ -234,9 +220,9 @@ class GuidanceCrawler:
             
         return '_'.join(parts) + '.csv'
 
-    def crawl_and_save(self, params: Dict) -> str:
+    def crawl(self, params: Dict) -> List[Dict]:
         """
-        NICE 웹사이트에서 진료지침 정보를 크롤링하고 CSV 파일로 저장하는 함수
+        NICE 웹사이트에서 진료지침 정보를 크롤링하는 함수
         
         Args:
             params (Dict): 검색 파라미터 딕셔너리
@@ -244,17 +230,35 @@ class GuidanceCrawler:
                 - from_date (str, optional): 시작 날짜 (YYYY-MM-DD)
                 - to_date (str, optional): 종료 날짜 (YYYY-MM-DD)
                 - type (str, optional): 유형 (Guidance, NICE advice, Quality standard)
-                - guidance_programme (str, optional): 진료지침 프로그램 (guide.md 참고)
+                - guidance_programme (str, optional): Guidance 타입일 때 사용
+                - advice_programme (str, optional): NICE advice 타입일 때 사용
                 - sort (str, optional): 정렬 방식 (Title, Date)
                 - result_per_page (int, optional): 페이지당 결과 수
                 - page (int, optional): 페이지 번호
             
         Returns:
-            str: 저장된 파일 경로
+            List[Dict]: 크롤링된 결과 리스트
         """
         # 데이터 크롤링
         results = self._get_list_of_guidance(params)
         
+        if not results:
+            self.logger.warning("No results found")
+            return []
+            
+        return results
+
+    def save_to_csv(self, results: List[Dict], params: Dict) -> str:
+        """
+        크롤링된 결과를 CSV 파일로 저장하는 함수
+        
+        Args:
+            results (List[Dict]): 크롤링된 결과 리스트
+            params (Dict): 검색 파라미터 딕셔너리
+            
+        Returns:
+            str: 저장된 파일 경로
+        """
         if not results:
             self.logger.warning("No results to save")
             return ""
@@ -274,91 +278,124 @@ class GuidanceCrawler:
             self.logger.error(f"Failed to save results: {str(e)}")
             return ""
 
-    async def get_total_pages(self, session: aiohttp.ClientSession) -> int:
-        """전체 페이지 수를 비동기적으로 가져옵니다."""
+    async def parse_pdf_url(self, session: aiohttp.ClientSession, guidance_info: Dict) -> Dict:
+        """개별 가이던스 페이지에서 PDF URL을 파싱
+        
+        Args:
+            session (aiohttp.ClientSession): 비동기 HTTP 세션
+            guidance_info (Dict): 가이던스 정보 딕셔너리
+            
+        Returns:
+            Dict: PDF URL이 추가된 가이던스 정보
+        """
         try:
-            # 검색 파라미터가 적용된 URL 사용
-            url = self.get_url()
-            self.logger.debug(f"Fetching total pages from URL: {url}")
+            guidance_url = guidance_info['url']
+            self.logger.debug(f"Fetching guidance page: {guidance_url}")
             
-            async with session.get(url) as response:
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                pagination_text = soup.select_one('.pagination__item--count strong:nth-of-type(2)').text
-                total_pages = int(pagination_text)
-                self.logger.debug(f"Total pages found: {total_pages}")
-                return total_pages
+            async with session.get(guidance_url) as detail_response:
+                if detail_response.status != 200:
+                    self.logger.warning(f"Failed to fetch guidance page {guidance_url}. Status: {detail_response.status}")
+                    guidance_info['pdf_url'] = None
+                    return guidance_info
+                    
+                detail_html = await detail_response.text()
+                detail_soup = BeautifulSoup(detail_html, 'html.parser')
+                
+                # 먼저 guidancedownload 찾기
+                pdf_link = detail_soup.find('a', {'data-track': 'guidancedownload'})
+                
+                # guidancedownload가 없으면 resourcedownload 찾기
+                if not pdf_link or 'href' not in pdf_link.attrs:
+                    pdf_link = detail_soup.find('a', {'data-track': 'resourcedownload'})
+                
+                if pdf_link and 'href' in pdf_link.attrs:
+                    pdf_url = urljoin(self.base_url, pdf_link['href'])
+                    guidance_info['pdf_url'] = pdf_url
+                    self.logger.debug(f"Successfully found PDF URL: {pdf_url}")
+                else:
+                    self.logger.warning(f"PDF link not found for guidance {guidance_url}")
+                    guidance_info['pdf_url'] = None
+                    
+                await asyncio.sleep(self._get_random_delay())  # 상세 페이지 요청 후 딜레이
+                
+        except aiohttp.ClientError as e:
+            self.logger.warning(f"Network error while fetching guidance {guidance_info['url']}: {str(e)}")
+            guidance_info['pdf_url'] = None
         except Exception as e:
-            self.logger.error(f"Error occurred while getting total pages: {e}")
-            raise
-
-    async def crawl_single_page(self, session: aiohttp.ClientSession, page: int) -> List[Dict]:
-        """단일 페이지를 비동기적으로 크롤링합니다."""
-        try:
-            # 페이지 번호 업데이트
-            self.update_page_number(page)
-            
-            # URL 가져오기 (기존 get_url 메서드 활용)
-            url = self.get_url()
-            
-            async with session.get(url) as response:
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                results = []
-                
-                rows = soup.select('table tbody tr')
-                for row in rows:
-                    cols = row.select('td')
-                    if len(cols) >= 4:
-                        title = cols[0].select_one('a')
-                        if title:
-                            results.append({
-                                'title': title.text.strip(),
-                                'url': title['href'],
-                                'reference': cols[1].text.strip(),
-                                'published_date': cols[2].text.strip(),
-                                'last_updated': cols[3].text.strip()
-                            })
-                
-                await asyncio.sleep(self._get_random_delay())  # 딜레이 추가
-                return results
-                
-        except Exception as e:
-            self.logger.error(f"Error occurred while crawling page {page}: {e}")
-            return []
+            self.logger.warning(f"Failed to get PDF URL for guidance {guidance_info['url']}: {str(e)}")
+            guidance_info['pdf_url'] = None
+        
+        return guidance_info
 
     async def crawl_all_pages(self) -> List[Dict]:
-        """모든 페이지를 비동기적으로 크롤링합니다."""
+        """모든 문서를 크롤링"""
         try:
+            # 현재 설정된 검색 파라미터 가져오기
+            current_type = self.search_params.get('type', '')
+            current_guidance_programme = self.search_params.get('guidance_programme', '')
+            current_advice_programme = self.search_params.get('advice_programme', '')
+            
+            # 현재 크롤링 중인 프로그램 정보 로깅
+            programme_info = f"Type: {current_type}"
+            if current_guidance_programme:
+                programme_info += f", Guidance Programme: {current_guidance_programme}"
+            if current_advice_programme:
+                programme_info += f", Advice Programme: {current_advice_programme}"
+            self.logger.info(f"Crawling documents for {programme_info}")
+            
             async with aiohttp.ClientSession() as session:
-                # 전체 페이지 수 확인
-                total_pages = await self.get_total_pages(session)
-                self.logger.info(f"Crawling {total_pages} pages")
-                
-                # 세마포어로 동시 요청 수 제한
-                semaphore = asyncio.Semaphore(self.max_concurrent)
-                
-                async def bounded_crawl(page: int) -> List[Dict]:
-                    async with semaphore:
-                        return await self.crawl_single_page(session, page)
-                
-                # 비동기 크롤링 실행
-                tasks = [bounded_crawl(page) for page in range(1, total_pages + 1)]
-                results = await tqdm_asyncio.gather(*tasks, desc="크롤링 진행률")
-                
-                # 결과 병합
-                all_results = []
-                for page_results in results:
-                    all_results.extend(page_results)
-                
-                return all_results
-                
+                url = self.get_url()
+                async with session.get(url) as response:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    results = []
+                    
+                    rows = soup.select('table tbody tr')
+                    self.logger.info(f"Found {len(rows)} guidance documents for {programme_info}")
+                    
+                    # tqdm을 사용하여 진행 상황 표시 (프로그램 정보 포함)
+                    for row in tqdm(rows, desc=f"문서 정보 수집 ({programme_info})"):
+                        cols = row.select('td')
+                        if len(cols) >= 4:
+                            title = cols[0].select_one('a')
+                            if title:
+                                guidance_url = urljoin(self.base_url, title['href'])
+                                results.append({
+                                    'title': title.text.strip(),
+                                    'url': guidance_url,
+                                    'pdf_url': None,  # PDF URL은 나중에 채워질 예정
+                                    'reference': cols[1].text.strip(),
+                                    'published_date': cols[2].text.strip(),
+                                    'last_updated': cols[3].text.strip(),
+                                    'type': current_type,
+                                    'guidance_programme': current_guidance_programme,
+                                    'advice_programme': current_advice_programme
+                                })
+                    
+                    if results:
+                        # PDF URL 수집 (동시성 제어)
+                        self.logger.info(f"Fetching PDF URLs for {len(results)} documents ({programme_info})...")
+                        
+                        # 세마포어를 사용하여 동시 요청 수 제한
+                        semaphore = asyncio.Semaphore(self.max_concurrent)
+                        
+                        async def fetch_with_semaphore(guidance):
+                            async with semaphore:
+                                return await self.parse_pdf_url(session, guidance)
+                        
+                        pdf_tasks = [fetch_with_semaphore(guidance) for guidance in results]
+                        # tqdm_asyncio를 사용하여 비동기 진행 상황 표시
+                        updated_results = await tqdm_asyncio.gather(*pdf_tasks, desc=f"PDF URL 수집 ({programme_info})")
+                        return updated_results
+                    
+                    return []
+                    
         except Exception as e:
             self.logger.error(f"Error occurred while crawling: {e}")
             return []
 
-    async def crawl_and_save_async(self, params: Dict) -> List[Dict]:
-        """비동기적으로 크롤링하고 결과를 반환합니다."""
+    async def crawl_async(self, params: Dict) -> List[Dict]:
+        """비동기적으로 크롤링하고 결과를 반환"""
         # 검색 파라미터 업데이트
         self.set_request_params(params)
         
@@ -391,8 +428,9 @@ if __name__ == "__main__":
         "to_date": None,
         "type": None,
         "guidance_programme": None,
+        "advice_programme": None,
         "sort": None,
-        "result_per_page": 30,
+        "result_per_page": 9999,
     }
     
     output_file = crawler.crawl_and_save(params)
