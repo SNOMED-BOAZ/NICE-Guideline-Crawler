@@ -7,7 +7,10 @@
 
 - title: 가이던스 문서의 제목
 - url: 가이던스 문서의 웹페이지 URL
-- pdf_url: 가이던스 문서의 PDF URL
+- contents: 가이던스 문서의 텍스트 콘텐츠  (json array 형식, [{title: str, url: str, content: str}, ...])
+- type: 가이던스 문서의 유형 (여러 개 지닌 문서들이 있어 배열로 저장)
+- guidance_programme: Guidance 프로그램 (여러 개 지닌 문서들이 있어 배열로 저장)
+- advice_programme: NICE advice 프로그램 (여러 개 지닌 문서들이 있어 배열로 저장)
 - reference: 가이던스 문서의 참조 코드
 - published_date: 최초 발행일 (DD MONTH YYYY)
 - last_updated: 마지막 업데이트 일자 (DD MONTH YYYY)
@@ -64,34 +67,3 @@ python main.py
 
 - 결과 파일명 형식: `guidance_{type}_{programme}_{from_date}_{to_date}.csv` (설정 안 된 옵션은 포함 X)
 - 로그 파일명 형식: `crawl_guidance_YYYYMMDDHHMMSS.log`
-
-## 검색 파라미터
-
-- search_query: 검색어
-- from_date: 시작 날짜
-- to_date: 종료 날짜
-- type: 유형
-  - Guidance
-  - NICE advice
-  - Quality standard
-- programme: 프로그램 (type에 따라 자동으로 적절한 필드에 할당)
-  - Guidance
-    - Antimicrobial prescribing guidelines
-    - Cancer service guideline
-    - Clinical guidelines
-    - COVID-19 rapid guideline
-    - Diagnostics guidance
-    - Health technology evaluations
-    - Highly specialised technologies guidance
-    - Interventional procedures guidance
-    - Medical technologies guidance
-    - Medicines practice guideline
-    - NICE guidelines
-    - Public health guidelines
-    - Safe staffing guideline
-    - Social care guidelines
-    - Technology appraisal guidance
-  - NICE advice
-    - Evidence summaries
-    - Medtech innovation briefings
-- result_per_page: 페이지당 결과 수

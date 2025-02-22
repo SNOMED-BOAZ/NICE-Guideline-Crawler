@@ -277,55 +277,147 @@ class GuidanceCrawler:
         except Exception as e:
             self.logger.error(f"Failed to save results: {str(e)}")
             return ""
-
-    async def parse_pdf_url(self, session: aiohttp.ClientSession, guidance_info: Dict) -> Dict:
-        """개별 가이던스 페이지에서 PDF URL을 파싱
+    
+    async def get_contents_in_detail_page(self, session: aiohttp.ClientSession, result: Dict) -> List[Dict]:
+        """
+        가이던스 상세 페이지에서 텍스트 콘텐츠를 파싱하는 함수
         
         Args:
             session (aiohttp.ClientSession): 비동기 HTTP 세션
-            guidance_info (Dict): 가이던스 정보 딕셔너리
-            
-        Returns:
-            Dict: PDF URL이 추가된 가이던스 정보
+            result (Dict): 크롤링된 결과 딕셔너리
         """
         try:
-            guidance_url = guidance_info['url']
-            self.logger.debug(f"Fetching guidance page: {guidance_url}")
+            url = result['url']
+            self.logger.debug(f"Fetching detail page: {url}")
             
-            async with session.get(guidance_url) as detail_response:
-                if detail_response.status != 200:
-                    self.logger.warning(f"Failed to fetch guidance page {guidance_url}. Status: {detail_response.status}")
-                    guidance_info['pdf_url'] = None
-                    return guidance_info
+            async with session.get(url) as response:
+                if response.status != 200:
+                    self.logger.warning(f"Failed to fetch detail page {url}. Status: {response.status}")
+                    result['contents'] = None
+                    return result
+                
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # 챕터 목록을 저장할 리스트
+                chapters = []
+                
+                # Case 1: stacked-nav 클래스를 가진 nav 태그 검색
+                nav_chapters = soup.find('nav', {'class': 'stacked-nav', 'aria-label': 'Chapters'})
+                if nav_chapters:
+                    ul = nav_chapters.find('ul', {'class': 'stacked-nav__list'})
+                    if ul:
+                        items = ul.find_all('li', {'class': 'stacked-nav__list-item'})
+                        for item in items:
+                            link = item.find('a')
+                            span = item.find('span', {'class': 'stacked-nav__content-wrapper'})
+                            if link and span:
+                                chapter_url = urljoin(url, link.get('href'))
+                                chapters.append({
+                                    'title': span.text.strip(),
+                                    'url': chapter_url
+                                })
+                
+                # Case 2: overview-menu와 guidance-menu div 태그 검색
+                if not chapters:
+                    overview_menu = soup.find('div', {'id': 'overview-menu'})
+                    if overview_menu:
+                        overview_link = overview_menu.find('a')
+                        if overview_link:
+                            chapters.append({
+                                "title": overview_link.text.strip(),
+                                "url": urljoin(url, overview_link.get('href'))
+                            })
                     
-                detail_html = await detail_response.text()
-                detail_soup = BeautifulSoup(detail_html, 'html.parser')
+                    guidance_menu = soup.find('div', {'id': 'guidance-menu'})
+                    if guidance_menu:
+                        nav_list = guidance_menu.find('ul', {'class': 'nav nav-list', 'id': 'Guidance-Menu'})
+                        if nav_list:
+                            items = nav_list.find_all('li')
+                            for item in items:
+                                link = item.find('a')
+                                if link:
+                                    chapter_url = urljoin(url, link.get('href'))
+                                    chapters.append({
+                                        "title": link.text.strip(),
+                                        "url": chapter_url
+                                    })
                 
-                # 먼저 guidancedownload 찾기
-                pdf_link = detail_soup.find('a', {'data-track': 'guidancedownload'})
+                # 각 챕터의 내용 수집
+                chapter_contents = []
+                for chapter in chapters:
+                    try:
+                        async with session.get(chapter['url']) as chapter_response:
+                            if chapter_response.status == 200:
+                                chapter_html = await chapter_response.text()
+                                chapter_soup = BeautifulSoup(chapter_html, 'html.parser')
+                                
+                                # 섹션 내용 찾기 - article 태그 내부의 모든 콘텐츠
+                                article = chapter_soup.find('article')
+                                if article:
+                                    # 모든 헤더와 단락을 순서대로 수집
+                                    content_elements = []
+                                    for element in article.find_all(['h2', 'h3', 'h4', 'p']):
+                                        # 헤더인 경우 구분을 위해 앞뒤로 ### 추가
+                                        if element.name.startswith('h'):
+                                            content_elements.append(f"### {element.text.strip()} ###")
+                                        else:
+                                            content_elements.append(element.text.strip())
+                                    
+                                    # 줄바꿈으로 구분하여 하나의 문자열로 결합
+                                    content = '\n'.join(content_elements)
+                                    
+                                    chapter_contents.append({
+                                        "title": chapter['title'],
+                                        "url": chapter['url'],
+                                        "content": content
+                                    })
+                                else:
+                                    # js-in-page-nav-target 내의 chapter div 찾기
+                                    nav_target = chapter_soup.find('div', {'class': 'js-in-page-nav-target'})
+                                    if nav_target:
+                                        chapter_div = nav_target.find('div', {'class': 'chapter'})
+                                        if chapter_div:
+                                            # chapter div 내의 모든 텍스트 수집
+                                            content_elements = []
+                                            for element in chapter_div.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'p', 'li']):
+                                                text = element.text.strip()
+                                                if text:
+                                                    if element.name.startswith('h'):
+                                                        content_elements.append(f"### {text} ###")
+                                                    else:
+                                                        content_elements.append(text)
+                                            
+                                            content = '\n'.join(content_elements)
+                                            chapter_contents.append({
+                                                "title": chapter['title'],
+                                                "url": chapter['url'],
+                                                "content": content
+                                            })
+                                    else:
+                                        # article 태그가 없는 경우 section-summary도 확인
+                                        section = chapter_soup.find('div', {'class': 'section-summary web-viewer-content'})
+                                        if section:
+                                            chapter_contents.append({
+                                                "title": chapter['title'],
+                                                "url": chapter['url'],
+                                                "content": section.get_text(strip=True)
+                                            })
+                                        else:
+                                            self.logger.warning(f"No content found in chapter: {chapter['url']}")
+                            else:
+                                self.logger.warning(f"Failed to fetch chapter page {chapter['url']}. Status: {chapter_response.status}")
+                    except Exception as e:
+                        self.logger.error(f"Error occurred while fetching chapter {chapter['url']}: {e}")
                 
-                # guidancedownload가 없으면 resourcedownload 찾기
-                if not pdf_link or 'href' not in pdf_link.attrs:
-                    pdf_link = detail_soup.find('a', {'data-track': 'resourcedownload'})
+                # 결과 저장
+                result['contents'] = chapter_contents
+                return result
                 
-                if pdf_link and 'href' in pdf_link.attrs:
-                    pdf_url = urljoin(self.base_url, pdf_link['href'])
-                    guidance_info['pdf_url'] = pdf_url
-                    self.logger.debug(f"Successfully found PDF URL: {pdf_url}")
-                else:
-                    self.logger.warning(f"PDF link not found for guidance {guidance_url}")
-                    guidance_info['pdf_url'] = None
-                    
-                await asyncio.sleep(self._get_random_delay())  # 상세 페이지 요청 후 딜레이
-                
-        except aiohttp.ClientError as e:
-            self.logger.warning(f"Network error while fetching guidance {guidance_info['url']}: {str(e)}")
-            guidance_info['pdf_url'] = None
         except Exception as e:
-            self.logger.warning(f"Failed to get PDF URL for guidance {guidance_info['url']}: {str(e)}")
-            guidance_info['pdf_url'] = None
-        
-        return guidance_info
+            self.logger.error(f"Error occurred while getting contents in detail page: {e}")
+            result['contents'] = None
+            return result
 
     async def crawl_all_pages(self) -> List[Dict]:
         """모든 문서를 크롤링"""
@@ -363,7 +455,7 @@ class GuidanceCrawler:
                                 results.append({
                                     'title': title.text.strip(),
                                     'url': guidance_url,
-                                    'pdf_url': None,  # PDF URL은 나중에 채워질 예정
+                                    'contents': None,  # 상세 페이지에서 파싱된 텍스트 콘텐츠 TODO:
                                     'reference': cols[1].text.strip(),
                                     'published_date': cols[2].text.strip(),
                                     'last_updated': cols[3].text.strip(),
@@ -373,20 +465,20 @@ class GuidanceCrawler:
                                 })
                     
                     if results:
-                        # PDF URL 수집 (동시성 제어)
-                        self.logger.info(f"Fetching PDF URLs for {len(results)} documents ({programme_info})...")
+                        self.logger.info(f"Fetching Detail Page for {len(results)} documents ({programme_info})...")
                         
                         # 세마포어를 사용하여 동시 요청 수 제한
                         semaphore = asyncio.Semaphore(self.max_concurrent)
                         
-                        async def fetch_with_semaphore(guidance):
+                        async def fetch_with_semaphore(result):
                             async with semaphore:
-                                return await self.parse_pdf_url(session, guidance)
+                                return await self.get_contents_in_detail_page(session, result)
                         
-                        pdf_tasks = [fetch_with_semaphore(guidance) for guidance in results]
+                        tasks = [fetch_with_semaphore(result) for result in results]
                         # tqdm_asyncio를 사용하여 비동기 진행 상황 표시
-                        updated_results = await tqdm_asyncio.gather(*pdf_tasks, desc=f"PDF URL 수집 ({programme_info})")
+                        updated_results = await tqdm_asyncio.gather(*tasks, desc=f"Content 수집 ({programme_info})")
                         return updated_results
+                    
                     
                     return []
                     
@@ -409,30 +501,12 @@ class GuidanceCrawler:
         self.logger.info(f"Total {len(results)} guidance records crawled")
         return results
 
-# 사용 예시
-if __name__ == "__main__":
-    # 로깅 설정
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    logger = logging.getLogger("crawl_guidance.crawler")
-    
-    # 크롤러 초기화
-    crawler = GuidanceCrawler(logger)
-    
-    # 검색 조건을 적용하여 크롤링 실행
-    params = {
-        "search_query": None,
-        "from_date": None,
-        "to_date": None,
-        "type": None,
-        "guidance_programme": None,
-        "advice_programme": None,
-        "sort": None,
-        "result_per_page": 9999,
-    }
-    
-    output_file = crawler.crawl_and_save(params)
-    if output_file:
-        print(f"Results saved to {output_file}")
+    # TODO:
+    async def crawl_contents_in_detail_page(self, url: str) -> List[Dict]:
+        """
+        가이던스 상세 페이지에서 텍스트 콘텐츠를 크롤링하는 함수
+        
+        Args:
+            url (str): 가이던스 상세 페이지의 URL
+        """
+        return 0
