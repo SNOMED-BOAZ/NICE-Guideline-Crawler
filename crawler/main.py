@@ -1,12 +1,44 @@
 import logging
 import os
 import datetime
+import argparse
 from dotenv import load_dotenv
 from crawler import GuidanceCrawler
 import asyncio
 import pandas as pd
 from typing import List, Dict, Optional
 from type_programme import type_programme
+
+def calculate_date_range(days_ago: int = None) -> tuple:
+    """
+    날짜 범위를 계산하는 함수
+    
+    Args:
+        days_ago (int, optional): 오늘로부터 며칠 전까지 검색할지 지정
+        
+    Returns:
+        tuple: (시작일, 종료일) 형식의 튜플
+    """
+    today = datetime.datetime.now()
+    if days_ago is not None:
+        from_date = (today - datetime.timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    else:
+        from_date = "2000-01-01"  # 기본값
+    
+    to_date = today.strftime("%Y-%m-%d")
+    return from_date, to_date
+
+def parse_arguments():
+    """
+    명령줄 인자를 파싱하는 함수
+    
+    Returns:
+        argparse.Namespace: 파싱된 인자들
+    """
+    parser = argparse.ArgumentParser(description="NICE 가이드라인 크롤러")
+    parser.add_argument("days_ago", nargs="?", type=int, default=None,
+                       help="검색 시작일(오늘로부터 며칠 전)")
+    return parser.parse_args()
 
 def init_logger():
     """로깅 설정 초기화"""
@@ -39,33 +71,27 @@ def init_logger():
     return logger
 
 def load_config():
-    """환경 설정을 로드합니다."""
+    """설정을 로드합니다."""
     load_dotenv(override=True)
     
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    # 명령줄 인자 파싱
+    args = parse_arguments()
+    
+    # 날짜 범위 계산
+    from_date, to_date = calculate_date_range(args.days_ago)
     
     def get_env_int(key: str, default: int) -> int:
         """정수형 환경 변수를 가져옵니다."""
         value = os.getenv(key, '').strip()
         return int(value) if value else default
     
-    def get_env_str(key: str, default: str = None) -> Optional[str]:
-        """문자열 환경 변수를 가져옵니다."""
-        value = os.getenv(key, '').strip()
-        return value if value else default
-    
     # 기본 설정 로드
     config = {
         "max_retries": get_env_int("MAX_RETRIES", 3),
         "max_concurrent": get_env_int("MAX_CONCURRENT", 15),
         "search_params": {
-            "from_date": get_env_str("FROM_DATE", "2000-01-01"),
-            "to_date": get_env_str("TO_DATE", today),
-            "type": get_env_str("TYPE", ""),
-            "guidance_programme": get_env_str("GUIDANCE_PROGRAMME", ""),
-            "advice_programme": get_env_str("ADVICE_PROGRAMME", ""),
-            "sort": get_env_str("SORT"),
-            "result_per_page": get_env_int("RESULT_PER_PAGE", 9999)
+            "from_date": from_date,
+            "to_date": to_date,
         }
     }
     
@@ -82,9 +108,6 @@ def logging_config(logger: logging.Logger, config: dict) -> None:
     search_params = config['search_params']
     logger.info(f"- 검색 시작일: {search_params['from_date']}")
     logger.info(f"- 검색 종료일: {search_params['to_date']}")
-    logger.info(f"- Type: {search_params['type'] or ''}")
-    logger.info(f"- Guidance Programme: {search_params['guidance_programme'] or ''}")
-    logger.info(f"- Advice Programme: {search_params['advice_programme'] or ''}")
     
     logger.info("\n=====================================\n")
 
