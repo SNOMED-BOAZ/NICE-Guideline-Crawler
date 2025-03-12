@@ -8,6 +8,7 @@ import asyncio
 import pandas as pd
 from typing import List, Dict, Optional
 from type_programme import type_programme
+import random
 
 def calculate_date_range(days_ago: int = None) -> tuple:
     """
@@ -88,7 +89,8 @@ def load_config():
     # 기본 설정 로드
     config = {
         "max_retries": get_env_int("MAX_RETRIES", 3),
-        "max_concurrent": get_env_int("MAX_CONCURRENT", 15),
+        "max_concurrent": get_env_int("MAX_CONCURRENT", 5),
+        "result_per_page": get_env_int("RESULT_PER_PAGE", 9999),
         "search_params": {
             "from_date": from_date,
             "to_date": to_date,
@@ -103,7 +105,7 @@ def logging_config(logger: logging.Logger, config: dict) -> None:
     logger.info("\n[기본 설정]")
     logger.info(f"- 최대 재시도 횟수: {config['max_retries']}")
     logger.info(f"- 동시 요청 수: {config['max_concurrent']}")
-    
+    logger.info(f"- 결과 페이지 수: {config['result_per_page']}")
     logger.info("\n[검색 파라미터]")
     search_params = config['search_params']
     logger.info(f"- 검색 시작일: {search_params['from_date']}")
@@ -184,6 +186,10 @@ def save_results(results: List[Dict], params: Dict, logger: logging.Logger) -> N
     except Exception as e:
         logger.error(f"Error occurred while saving results: {e}")
 
+def _get_random_delay() -> float:
+    """0.5초에서 0.8초 사이의 랜덤한 딜레이 시간을 반환"""
+    return random.uniform(0.5, 0.8)
+
 async def crawl_by_type_and_programme(logger: logging.Logger, config: dict) -> List[Dict]:
     """
     각 타입과 프로그램별로 크롤링을 수행하는 함수
@@ -198,48 +204,53 @@ async def crawl_by_type_and_programme(logger: logging.Logger, config: dict) -> L
     all_results = []
     tasks = []
 
-    # 각 타입에 대해 반복
+    # 기본 파라미터에 result_per_page 추가
+    base_params = config['search_params'].copy()
+    base_params['result_per_page'] = config['result_per_page']
+
     for type_dict in type_programme['type']:
         for type_name, programmes in type_dict.items():
-            # 기본 파라미터 설정
-            base_params = config['search_params'].copy()
-            base_params['type'] = type_name
+            params = base_params.copy()  # 기본 파라미터를 복사
+            params['type'] = type_name
 
             if type_name == 'Guidance':
-                # Guidance 타입의 각 프로그램에 대해 크롤링
                 for programme in programmes:
-                    params = base_params.copy()
-                    params['guidance_programme'] = programme
+                    # 각 요청 사이에 랜덤 지연 추가
+                    await asyncio.sleep(_get_random_delay())
+                    current_params = params.copy()
+                    current_params['guidance_programme'] = programme
                     crawler = GuidanceCrawler(
                         logger=logger,
                         max_retries=config['max_retries'],
                         max_concurrent=config['max_concurrent']
                     )
-                    tasks.append(crawler.crawl_async(params))
+                    tasks.append(crawler.crawl_async(current_params))
                     logger.info(f"크롤링 작업 추가: {type_name} - {programme}")
 
             elif type_name == 'NICE advice':
-                # NICE advice 타입의 각 프로그램에 대해 크롤링
                 for programme in programmes:
-                    params = base_params.copy()
-                    params['advice_programme'] = programme
+                    # 각 요청 사이에 랜덤 지연 추가
+                    await asyncio.sleep(_get_random_delay())
+                    current_params = params.copy()
+                    current_params['advice_programme'] = programme
                     crawler = GuidanceCrawler(
                         logger=logger,
                         max_retries=config['max_retries'],
                         max_concurrent=config['max_concurrent']
                     )
-                    tasks.append(crawler.crawl_async(params))
+                    tasks.append(crawler.crawl_async(current_params))
                     logger.info(f"크롤링 작업 추가: {type_name} - {programme}")
 
             elif type_name == 'Quality standard':
-                # Quality standard는 프로그램이 없으므로 바로 크롤링
-                params = base_params.copy()
+                # 각 요청 사이에 랜덤 지연 추가
+                await asyncio.sleep(_get_random_delay())
+                current_params = params.copy()
                 crawler = GuidanceCrawler(
                     logger=logger,
                     max_retries=config['max_retries'],
                     max_concurrent=config['max_concurrent']
                 )
-                tasks.append(crawler.crawl_async(params))
+                tasks.append(crawler.crawl_async(current_params))
                 logger.info(f"크롤링 작업 추가: {type_name}")
 
     # 모든 크롤링 작업을 비동기로 실행

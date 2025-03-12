@@ -18,15 +18,13 @@ RUN mkdir -p output logs
 ENV MAX_RETRIES="5"
 ENV MAX_CONCURRENT="15"
 ENV LOG_LEVEL="INFO"
-ENV FROM_DATE="2000-01-01"
-ENV TO_DATE=""
-ENV TYPE=""
-ENV PROGRAMME=""
 ENV RESULT_PER_PAGE="9999"
-ENV SEARCH_QUERY=""
 
 # 볼륨 설정
 VOLUME ["/app/output", "/app/logs"]
 
-# 실행 명령
-CMD ["python", "main.py"]
+# ENTRYPOINT와 CMD 설정
+# ENTRYPOINT는 항상 실행되는 명령이고, CMD는 기본 인자로 사용됨
+ENTRYPOINT ["python", "main.py"]
+# CMD는 기본값으로 빈 배열을 제공하여 인자가 없을 때 그냥 main.py가 실행되도록 함
+CMD []

@@ -10,11 +10,13 @@ import aiohttp
 import asyncio
 from tqdm import tqdm
 from tqdm.asyncio import tqdm as tqdm_asyncio
+import json
+import os
 
 class GuidanceCrawler:
     """진료지침 정보를 크롤링하는 클래스"""
     
-    def __init__(self, logger=None, max_retries: int = 3, max_concurrent: int = 5):
+    def __init__(self, logger=None, max_retries: int = 3, max_concurrent: int = 2):
         """
         Constructor
         
@@ -277,6 +279,41 @@ class GuidanceCrawler:
         except Exception as e:
             self.logger.error(f"Failed to save results: {str(e)}")
             return ""
+        
+    def save_guideline_contents_json(self, contents: Dict, filename: str):
+        """
+        가이던스 콘텐츠를 JSON 파일로 저장하는 함수
+        
+        Args:
+            contents (Dict): 가이던스 콘텐츠 딕셔너리
+            filename (str): 저장할 파일명
+        """
+        path = "output/contents"
+        if not os.path.exists(path):
+            os.makedirs(path)
+        filepath = f"{path}/{filename}.json"
+        
+        # 줄바꿈 문자를 공백으로 대체하는 함수
+        def replace_newlines(obj):
+            if isinstance(obj, dict):
+                return {k: replace_newlines(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [replace_newlines(item) for item in obj]
+            elif isinstance(obj, str):
+                # 연속된 줄바꿈은 하나의 공백으로 대체
+                return ' '.join(obj.split())
+            else:
+                return obj
+        
+        # 줄바꿈 문자를 공백으로 대체한 콘텐츠 생성
+        processed_contents = replace_newlines(contents)
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(processed_contents, f, ensure_ascii=False, indent=4)
+            self.logger.info(f"Guideline contents saved to {filepath}")
+        except Exception as e:
+            self.logger.error(f"Failed to save guideline contents: {str(e)}")
     
     async def get_contents_in_detail_page(self, session: aiohttp.ClientSession, result: Dict) -> List[Dict]:
         """
@@ -287,17 +324,28 @@ class GuidanceCrawler:
             result (Dict): 크롤링된 결과 딕셔너리
         """
         try:
+            reference = result['reference']
             url = result['url']
             self.logger.debug(f"Fetching detail page: {url}")
             
-            async with session.get(url) as response:
+            # 타임아웃 설정 추가
+            timeout = aiohttp.ClientTimeout(total=30)  # 30초 타임아웃
+            
+            async with session.get(url, timeout=timeout) as response:
                 if response.status != 200:
                     self.logger.warning(f"Failed to fetch detail page {url}. Status: {response.status}")
                     result['contents'] = None
                     return result
                 
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
+                try:
+                    # response.text() 대신 content.read() 사용하되 예외 처리 추가
+                    content = await response.content.read()
+                    html = content.decode('utf-8')
+                    soup = BeautifulSoup(html, 'html.parser')
+                except Exception as e:
+                    self.logger.error(f"Error reading content from {url}: {e}")
+                    result['contents'] = None
+                    return result
                 
                 # 챕터 목록을 저장할 리스트
                 chapters = []
@@ -314,7 +362,7 @@ class GuidanceCrawler:
                             if link and span:
                                 chapter_url = urljoin(url, link.get('href'))
                                 chapters.append({
-                                    'title': span.text.strip(),
+                                    'title': span.get_text(strip=True),  # 제목은 공백 제거
                                     'url': chapter_url
                                 })
                 
@@ -325,7 +373,7 @@ class GuidanceCrawler:
                         overview_link = overview_menu.find('a')
                         if overview_link:
                             chapters.append({
-                                "title": overview_link.text.strip(),
+                                "title": overview_link.get_text(strip=True),  # 제목은 공백 제거
                                 "url": urljoin(url, overview_link.get('href'))
                             })
                     
@@ -339,78 +387,108 @@ class GuidanceCrawler:
                                 if link:
                                     chapter_url = urljoin(url, link.get('href'))
                                     chapters.append({
-                                        "title": link.text.strip(),
+                                        "title": link.get_text(strip=True),  # 제목은 공백 제거
                                         "url": chapter_url
                                     })
                 
                 # 각 챕터의 내용 수집
-                chapter_contents = []
+                chapter_contents = {}
+                chapter_contents['title'] = result['title']
+                chapter_contents['reference'] = reference
+                chapter_contents['url'] = url
+                chapter_contents['contents'] = {}
                 for chapter in chapters:
                     try:
-                        async with session.get(chapter['url']) as chapter_response:
-                            if chapter_response.status == 200:
-                                chapter_html = await chapter_response.text()
-                                chapter_soup = BeautifulSoup(chapter_html, 'html.parser')
-                                
-                                # 섹션 내용 찾기 - article 태그 내부의 모든 콘텐츠
-                                article = chapter_soup.find('article')
-                                if article:
-                                    # 모든 헤더와 단락을 순서대로 수집
-                                    content_elements = []
-                                    for element in article.find_all(['h2', 'h3', 'h4', 'p']):
-                                        # 헤더인 경우 구분을 위해 앞뒤로 ### 추가
-                                        if element.name.startswith('h'):
-                                            content_elements.append(f"### {element.text.strip()} ###")
-                                        else:
-                                            content_elements.append(element.text.strip())
-                                    
-                                    # 줄바꿈으로 구분하여 하나의 문자열로 결합
-                                    content = '\n'.join(content_elements)
-                                    
-                                    chapter_contents.append({
-                                        "title": chapter['title'],
-                                        "url": chapter['url'],
-                                        "content": content
-                                    })
-                                else:
-                                    # js-in-page-nav-target 내의 chapter div 찾기
-                                    nav_target = chapter_soup.find('div', {'class': 'js-in-page-nav-target'})
-                                    if nav_target:
-                                        chapter_div = nav_target.find('div', {'class': 'chapter'})
-                                        if chapter_div:
-                                            # chapter div 내의 모든 텍스트 수집
-                                            content_elements = []
-                                            for element in chapter_div.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'p', 'li']):
-                                                text = element.text.strip()
-                                                if text:
-                                                    if element.name.startswith('h'):
-                                                        content_elements.append(f"### {text} ###")
-                                                    else:
-                                                        content_elements.append(text)
+                        # 재시도 로직 추가
+                        max_retries = 3
+                        for retry in range(max_retries):
+                            try:
+                                async with session.get(chapter['url'], timeout=timeout) as chapter_response:
+                                    if chapter_response.status == 200:
+                                        # 컨텐츠 읽기 시도
+                                        try:
+                                            chapter_content = await chapter_response.content.read()
+                                            chapter_html = chapter_content.decode('utf-8')
+                                            chapter_soup = BeautifulSoup(chapter_html, 'html.parser')
                                             
-                                            content = '\n'.join(content_elements)
-                                            chapter_contents.append({
-                                                "title": chapter['title'],
-                                                "url": chapter['url'],
-                                                "content": content
-                                            })
+                                            # 섹션 내용 찾기 - article 태그 내부의 모든 콘텐츠
+                                            article = chapter_soup.find('article')
+                                            if article:
+                                                # 모든 헤더와 단락을 순서대로 수집
+                                                content_elements = []
+                                                for element in article.find_all(['h2', 'h3', 'h4', 'p']):
+                                                    # 헤더인 경우 구분을 위해 앞뒤로 ### 추가
+                                                    if element.name.startswith('h'):
+                                                        content_elements.append(f"### {element.get_text(strip=True)} ###")
+                                                    else:
+                                                        # 단락은 공백으로 정리하여 텍스트 추출
+                                                        text = ' '.join(element.get_text().split())
+                                                        content_elements.append(text)
+                                                
+                                                # 공백으로 구분하여 하나의 문자열로 결합
+                                                content = ' '.join(content_elements)
+                                                
+                                                chapter_contents['contents'][chapter['title']] = content
+                                                # 성공적으로 처리되면 재시도 루프 종료
+                                                break
+                                            else:
+                                                # js-in-page-nav-target 내의 chapter div 찾기
+                                                nav_target = chapter_soup.find('div', {'class': 'js-in-page-nav-target'})
+                                                if nav_target:
+                                                    chapter_div = nav_target.find('div', {'class': 'chapter'})
+                                                    if chapter_div:
+                                                        # chapter div 내의 모든 텍스트 수집
+                                                        content_elements = []
+                                                        for element in chapter_div.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'p', 'li']):
+                                                            if element.name.startswith('h'):
+                                                                content_elements.append(f"### {element.get_text(strip=True)} ###")
+                                                            else:
+                                                                # 단락과 리스트 아이템은 공백으로 정리
+                                                                text = ' '.join(element.get_text().split())
+                                                                content_elements.append(text)
+                                                        
+                                                        content = ' '.join(content_elements)
+                                                        chapter_contents['contents'][chapter['title']] = content
+                                                        # 성공적으로 처리되면 재시도 루프 종료
+                                                        break
+                                                else:
+                                                    # article 태그가 없는 경우 section-summary도 확인
+                                                    section = chapter_soup.find('div', {'class': 'section-summary web-viewer-content'})
+                                                    if section:
+                                                        # 공백으로 정리하여 텍스트 추출
+                                                        text = ' '.join(section.get_text().split())
+                                                        chapter_contents['contents'][chapter['title']] = text
+                                                        # 성공적으로 처리되면 재시도 루프 종료
+                                                        break
+                                                    else:
+                                                        self.logger.warning(f"No content found in chapter: {chapter['url']}")
+                                                        # 콘텐츠를 찾지 못했지만 오류는 아니므로 재시도 루프 종료
+                                                        break
+                                        except Exception as e:
+                                            self.logger.warning(f"Error reading chapter content (attempt {retry+1}/{max_retries}): {e}")
+                                            if retry == max_retries - 1:  # 마지막 시도였다면
+                                                raise  # 예외를 다시 발생시켜 외부 예외 처리로 넘김
+                                            # 재시도 전 잠시 대기
+                                            await asyncio.sleep(1)
                                     else:
-                                        # article 태그가 없는 경우 section-summary도 확인
-                                        section = chapter_soup.find('div', {'class': 'section-summary web-viewer-content'})
-                                        if section:
-                                            chapter_contents.append({
-                                                "title": chapter['title'],
-                                                "url": chapter['url'],
-                                                "content": section.get_text(strip=True)
-                                            })
-                                        else:
-                                            self.logger.warning(f"No content found in chapter: {chapter['url']}")
-                            else:
-                                self.logger.warning(f"Failed to fetch chapter page {chapter['url']}. Status: {chapter_response.status}")
+                                        self.logger.warning(f"Failed to fetch chapter page {chapter['url']}. Status: {chapter_response.status}")
+                                        if retry == max_retries - 1:  # 마지막 시도였다면
+                                            break  # 더 이상 재시도하지 않음
+                                        # 재시도 전 잠시 대기
+                                        await asyncio.sleep(1)
+                            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                                self.logger.warning(f"Network error (attempt {retry+1}/{max_retries}): {e}")
+                                if retry == max_retries - 1:  # 마지막 시도였다면
+                                    raise  # 예외를 다시 발생시켜 외부 예외 처리로 넘김
+                                # 재시도 전 잠시 대기
+                                await asyncio.sleep(1)
                     except Exception as e:
                         self.logger.error(f"Error occurred while fetching chapter {chapter['url']}: {e}")
+                        # 이 챕터에 대한 처리는 실패했지만 다른 챕터는 계속 처리
+                        continue
                 
                 # 결과 저장
+                self.save_guideline_contents_json(chapter_contents, result['reference'])
                 result['contents'] = chapter_contents
                 return result
                 
