@@ -17,36 +17,29 @@
 
 ## 사용법
 
-### 스크립트 사용
+### Docker
 
 ```bash
-chmod +x start_crawl.sh
+docker build -t crawler .
 
-./start_crawl.sh
+# 30일 전까지의 문서 수집 (숫자 변경 가능)
+docker run -v $(pwd)/output:/app/output -v $(pwd)/logs:/app/logs crawler 30
+
+# 전체 문서 수집
+docker run -v $(pwd)/output:/app/output -v $(pwd)/logs:/app/logs crawler
 ```
 
-### Docker 사용 (Docker에는 .env가 들어가지 않음. Dockerfile의 환경변수 또는 실행 명령어로 설정.)
-
-1. Docker 이미지 빌드
+### Python 실행
 
 ```bash
-# crawler 디렉토리로 이동
-cd crawler
+# 30일 전까지의 문서 수집 (숫자 변경 가능)
+python main.py 30
 
-# 이미지 빌드
-docker build -t guidance-crawler .
-
-# 컨테이너 실행 (현재 디렉토리 기준으로 볼륨 마운트)
-docker run -v $(pwd)/output:/app/output -v $(pwd)/logs:/app/logs guidance-crawler
-
-# 환경 변수 설정과 함께 실행
-docker run -v $(pwd)/output:/app/output -v $(pwd)/logs:/app/logs \
-  -e TYPE=Guidance \
-  -e PROGRAMME="Clinical guidelines" \
-  guidance-crawler
+# 전체 문서 수집
+python main.py
 ```
 
-### 로컬 실행 (.env는 환경변수보다 우선 적용 됨)
+### 로컬 실행을 위한 환경 설정
 
 > Python 3.11.7
 
@@ -54,11 +47,8 @@ docker run -v $(pwd)/output:/app/output -v $(pwd)/logs:/app/logs \
 # 1. 패키지 설치
 pip install -r requirements.txt
 
-# 2. 환경 변수 설정
+# 2. 환경 변수 설정 (선택사항)
 cp .env.example .env
-
-# 3. 실행
-python main.py
 ```
 
 ## 결과물
